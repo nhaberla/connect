@@ -1,6 +1,6 @@
 ---
 name: rpcn:review
-description: Code review a pull request for Redpanda Connect, checking Go patterns, tests, and component architecture
+description: Code review a pull request for Redpanda Connect, checking Go patterns, tests, component architecture, and commit policy
 arguments:
   - name: pr
     description: "Pull request number or URL to review. Defaults to current branch PR."
@@ -20,10 +20,10 @@ This review orchestrates specialized agents for domain-specific analysis. Do not
    - **Agent A**: Collect paths to relevant CLAUDE.md files (root `CLAUDE.md`, `config/CLAUDE.md`, and any in directories touched by the PR)
    - **Agent B**: Summarize the PR (files modified, change categories: component implementation, tests, configuration, CLI, etc.)
 
-3. **Review** - Run 3 Sonnet agents in parallel. Each receives the PR diff, change summary, and relevant CLAUDE.md content. Each returns a list of issues with a reason and confidence score 0-100:
+3. **Review** - Run 3 Sonnet agents and 1 Haiku agent in parallel. Each receives the PR diff, change summary, and relevant CLAUDE.md content. Each returns a list of issues with a reason, confidence score 0-100, and (for scores 50-74) a brief explanation of why the reviewer is uncertain:
    - 0: False positive or pre-existing issue
    - 25: Possibly real, possibly false positive. Stylistic issues not in CLAUDE.md/agent files.
-   - 50: Real but nitpick or rare. Not important relative to the rest of the PR.
+   - 50: Real but uncertain — reviewer lacks context to confirm severity or correctness. Include uncertainty reason (e.g., "unfamiliar domain pattern", "can't determine intent without runtime context", "possible edge case but depends on caller behavior").
    - 75: Verified, will be hit in practice. Directly impacts functionality or mentioned in CLAUDE.md/agent files.
    - 100: Confirmed, will happen frequently. Evidence directly confirms this.
 
@@ -33,7 +33,18 @@ This review orchestrates specialized agents for domain-specific analysis. Do not
 
    **Agent 3 - Bugs and Security**: Logic errors, nil dereferences, race conditions, resource leaks, SQL/command injection, XSS, hardcoded secrets. Focus on real bugs, not nitpicks.
 
-4. **Filter** - Drop issues scoring below 75. If none remain, skip commenting.
+   **Agent 4 - Commit Policy** (Haiku): Uses `git log` and `git show --stat` on the PR commits. Checks:
+   - **Granularity**: Each commit is one small, self-contained, logical change. Flag commits mixing unrelated work.
+   - **Message format** (preferred, not enforced): `system: message` or `system(subsystem): message` (e.g., `otlp: add authz support`, `gateway(authz): add http middleware`) or uppercase plain message for global changes (e.g., `Bump to Go 1.26`).
+   - **Message quality** (enforced): Flag messages that are vague ("fix stuff", "updates", "WIP"), misleading (title doesn't match the actual changes), or incomprehensible.
+   - **Fixup/squash**: Flag unsquashed `fixup!`/`squash!` commits.
+   - Ignore PR number suffixes `(#1234)`.
+
+4. **Filter** - Drop issues scoring below 50. Separate remaining items into two buckets:
+   - **Issues** (score >= 75): Confirmed problems to flag.
+   - **Attention areas** (score 50-74): Areas where the reviewer is uncertain and a human should look. Each must include the uncertainty reason from step 3.
+
+   If both buckets are empty, skip commenting.
 
 5. **Comment** - Post results via `gh pr comment`. Keep output brief, no emojis. Link and cite relevant code/files/URLs with full git SHA.
 
@@ -66,12 +77,26 @@ Found N issues:
 Generated with Claude Code
 ```
 
-If no issues found:
+If attention areas found (score 50-74), append after issues (or after the heading if no issues):
+
+```
+### Areas for human review
+
+The following areas had observations where the automated review was not confident enough to flag as issues. A human reviewer should verify these.
+
+1. <brief description> — <uncertainty reason>
+
+<link to file and line with full SHA + line range>
+
+2. ...
+```
+
+If neither issues nor attention areas found:
 
 ```
 ### Code review
 
-No issues found. Checked for bugs, Go patterns and component architecture (godev), test quality (tester), and CLAUDE.md compliance.
+No issues found. Checked for bugs, Go patterns and component architecture (godev), test quality (tester), commit policy, and CLAUDE.md compliance.
 
 Generated with Claude Code
 ```
